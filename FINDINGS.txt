@@ -216,6 +216,7 @@ machine through the dongle.
                             no-Bluetooth PC they are inert; kept for when a BT
                             adapter is added.
   razer_barracuda.py        CLI (battery/status/sidetone/power-saving) over 2.4.
+  barracuda_param_sweep.py  read-only GET sweep 0x00..0xff -> dongle param map.
   barracuda-control         launcher (sets Wayland env) + app-menu .desktop.
   barracuda_record.py       full HID recorder (param sweep + passive capture).
   btsnoop_decode.py         minimal btsnoop_hci.log decoder (BLE captures).
@@ -223,4 +224,17 @@ machine through the dongle.
   99-razer-barracuda.rules  udev (OpenRazer group + hidraw access).
   Research/scratch + the OpenRazer driver patches + install/rollback scripts
   live in ~/barracuda-driver-backup/.
+
+--------------------------------------------------------------------------------
+ 10. FULL DONGLE PARAM MAP (class 0x08 GET sweep)
+--------------------------------------------------------------------------------
+  A read-only sweep of every param id 0x00..0xff over the 2.4 dongle is in
+  FINDINGS_dongle_param_map.md (annotated) + FINDINGS_dongle_param_dump.txt
+  (raw). 168 param/channel replies, ids 0x00..0xa8; nothing answers above 0xa8.
+  Highlights: 0x00="IN24" model string; 0x20 connection; 0x21 battery(=28);
+  0x2a charging; 0x55 mic-mute; 0x2e holds a pairing-key fragment (c0 fd).
+  Array params 0x15 (flat [5,5,5,5,5]) and 0x17 (rising [5,6,7,7,8]) are the
+  only fresh EQ-over-2.4 leads, but unconfirmed (need slider-correlation).
+  Most other ids return a constant 0x01 = default/unimplemented, not real
+  toggles. Reproduce: tools/barracuda_param_sweep.py.
 ================================================================================
