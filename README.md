@@ -82,6 +82,26 @@ sudo udevadm control --reload-rules
 # replug the dongle
 ```
 
+## Audio control on Linux (PipeWire) — `pipewire/`, `wireplumber/`
+
+The device's EQ/THX/mic-NC aren't dongle commands (they're PC-side DSP), so on
+Linux they're **rebuilt natively in the audio graph** — no Bluetooth, no Windows,
+no extra app. All live and reboot-persistent. Full diagnosis in
+[`FINDINGS.txt` §11](FINDINGS.txt) and [`pipewire/README.md`](pipewire/README.md).
+
+| Capability | How |
+|---|---|
+| **10-band headphone EQ** | PipeWire `filter-chain` sink (`barracuda_eq`), gains driven live from the GUI via `pw-cli`, 12 tuned profiles + favourites + custom save |
+| **10-band microphone EQ** | virtual source *"Barracuda Mic (clean)"* = fixed 75 Hz high-pass + `mic0..mic9`, same GUI band-sliders, 8 voice presets |
+| **Sidetone** | `module-loopback` mic→sink (software mic monitoring) |
+| **Low latency** | PipeWire quantum 512 (~10 ms) vs the default ~42 ms — `98-low-latency.conf` |
+| **Mic anti-clip** | ALSA capture-gain headroom (the "brr"/distortion was ADC clipping, not buffering) |
+| **Anti-crackle / anti-dropout** | never-suspend the nodes, lock the rate to 48 kHz, output-only buffer cushion (`wireplumber/51-barracuda-mic.conf`) |
+
+These were the hard part — see the engineering notes below for *why* each one is
+what it is (it's a single-rate, half-duplex, **USB 1.1** wireless device, and that
+constraint explains every symptom).
+
 ## OpenRazer / Polychromatic integration (`openrazer/`)
 
 Patches that add the Barracuda to OpenRazer so it appears as a recognized
@@ -109,6 +129,53 @@ Send **only** correctly-framed `50 41` ("PA") frames. A blind, unframed bare-
 opcode sweep can hit an "enter bootloader" command — the dongle flips to PID
 `0x5020` ("Macronix"), audio dies, and recovery needs a firmware re-flash via
 Synapse on Windows. Details in `FINDINGS.txt` §8.
+
+## How this was reverse-engineered (engineering notes)
+
+No datasheet, no vendor docs, no Linux prior art that worked — the device was
+black-boxed from both ends and rebuilt from observed behaviour.
+
+**Method — capture, don't guess.** Every command in this repo was *observed on
+the wire*, never brute-forced into the device:
+- **USB side:** drove Razer Synapse on Windows and captured the dongle's HID
+  traffic, then diffed captures across UI actions to isolate each command
+  (sidetone toggle → `SET 0x98`, power-saving slider → `SET 0xac`, etc.).
+- **Bluetooth side:** the EQ lives only on BLE, so captured the Razer *mobile*
+  app instead — Android "Bluetooth HCI snoop log" → `adb bugreport` → wrote a
+  `btsnoop_hci.log` decoder (`tools/btsnoop_decode.py`) → found the EQ write to
+  GATT handle `0x0014`.
+- **Validation:** a read-only `GET 0x00..0xff` param sweep mapped the dongle's
+  168 responding params (`FINDINGS_dongle_param_map.md`) to separate real
+  controls from constants.
+
+**War stories (the parts that teach you something):**
+- **Bricked it, recovered it.** An early *unframed* opcode sweep hit an
+  undocumented "enter bootloader" command — the dongle flipped PID `053C→5020`,
+  manufacturer string changed to "Macronix", audio died. Recovered by
+  re-flashing firmware via Synapse, then root-caused the framing bug (a
+  double-prepended report-id byte shifted writes into bare-opcode space) and
+  added a hard safety rule: **only ever send verified `50 41`-framed frames.**
+- **"Battery doesn't work" was wrong.** The dongle *does* answer `GET 0x21`, but
+  only after an RF-refresh frame (`class 0x0e / param 0xe1`) pokes it to pull a
+  fresh value over 2.4 GHz — found by noticing Synapse sends that frame before
+  *every* battery poll.
+- **Three different "bad audio" bugs that looked like one.** Systematic
+  bisection (prove the capture path clean with `pw-top ERR=0` *before* blaming
+  it) separated: latency = oversized buffer; mic "brr" = ADC **clipping** (gain,
+  not buffering); ~1 s dropouts = **2.4 GHz packet loss** surfacing as a kernel
+  `cannot get freq at ep` clock fault — three causes, three fixes, documented in
+  `FINDINGS.txt` §11.
+- **Knowing when to stop.** Forcing `api.alsa.period-size` on a USB 1.1 device
+  *garbled* the audio — recorded the dead end so the next person doesn't repeat
+  it. The root insight tying it all together: it's a single-rate (48 kHz),
+  half-duplex, **USB 1.1** wireless device, and that one constraint predicts
+  every symptom.
+
+**What's in here as a result:** a clean-room HID/BLE protocol spec, a userspace
+hidraw CLI + a Synapse-style PyQt6 GUI, native PipeWire audio (headphone + mic
+EQ, sidetone, latency/crackle/dropout tuning), an OpenRazer device patch, and a
+full findings document — built iteratively against a live device with empirical
+A/B testing at every step.
 
 ## License
 
