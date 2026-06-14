@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Razer Barracuda 2.4
+Comment=Control panel for the Razer Barracuda 2.4 (Linux)
+Exec=barracuda-control
+Icon=audio-headset
+Terminal=false
+Categories=AudioVideo;Settings;

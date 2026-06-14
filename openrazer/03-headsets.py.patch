@@ -1,0 +1,22 @@
+--- a/daemon/openrazer_daemon/hardware/headsets.py
++++ b/daemon/openrazer_daemon/hardware/headsets.py
+@@ -236,3 +236,19 @@
+                'set_custom_kraken']
+ 
+     DEVICE_IMAGE = "https://medias-p1.phoenix.razer.com/sys-master-phoenix-images-container/hcc/h6b/9631977570334/kraken-kitty-v2-quartz-500x500.png"
++
++
++class RazerBarracuda24(__RazerDevice):
++    """
++    Razer Barracuda 2.4 wireless headset (USB dongle 1532:053C).
++
++    Uses the device's own vendor (PI/PA) HID protocol, not the legacy Razer
++    report transport, so only basic identity is exposed here. Battery telemetry
++    is pending one more capture (see ~/barracuda-toolkit/README.md); the
++    userspace tool there handles live control.
++    """
++    USB_VID = 0x1532
++    USB_PID = 0x053C
++    METHODS = ['get_device_type_headset']
++
++    DEVICE_IMAGE = "https://dl.razerzone.com/src/headset/barracuda-2-4.png"

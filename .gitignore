@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.pcap
+*.pcapng
+btsnoop*.log
+bugreport*.zip

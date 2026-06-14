@@ -1,0 +1,217 @@
+================================================================================
+ RAZER BARRACUDA 2.4 — COMPLETE LINUX REVERSE-ENGINEERING FINDINGS
+ Consolidated 2026-06-14. Covers the 2.4 dongle protocol, the Bluetooth control
+ protocol, what works where, the OpenRazer integration, the toolkit, and the
+ hard limits discovered. Supersedes the earlier RAZER_BARRACUDA.txt notes.
+================================================================================
+
+--------------------------------------------------------------------------------
+ 0. DEVICE
+--------------------------------------------------------------------------------
+  Product      : Razer Barracuda 2.4 wireless headset (RZ04-0379)
+  2.4 dongle   : USB VID 0x1532 / PID 0x053C  (USB 1.1 Full Speed)
+  Bluetooth    : classic BR/EDR + BLE GATT; MAC seen 44:5E:CD:xx:xx:xx (your headset's BLE MAC)
+  Phone app    : "Razer Audio" = com.razer.audiocompanion (controls over BLE)
+  Bootloader   : PID flips to 0x5020 (manufacturer "Macronix") if you send junk
+                 — see SAFETY. Recover only by re-flashing firmware via Synapse.
+
+  USB interfaces on the dongle:
+    1.0 / 1.1 / 1.2  USB-Audio Class (snd-usb-audio)  -> normal Linux audio
+    1.3             vendor HID (0xFF00), report id 0x01, 64-byte in/out reports
+
+--------------------------------------------------------------------------------
+ 1. THE BIG PICTURE — WHERE EACH FEATURE LIVES  (most important section)
+--------------------------------------------------------------------------------
+There are TWO independent control paths, and they are NOT equivalent:
+
+  A) 2.4 GHz dongle (USB HID on interface 1.3)
+       - Carries AUDIO and CONNECTION STATE.
+       - Responds to a GET of param 0x20 (link state) and 0x01.
+       - DOES NOT apply settings and DOES NOT relay battery. Verified on real
+         hardware: sidetone (0x98/0x99), power-saving (0xac), EQ (0x93) and
+         battery (0x21) all produce NO audible/observable effect over 2.4.
+       - Synapse on Windows does its EQ as PC-side DSP, so the headset's 2.4
+         firmware path was never built to handle EQ/most settings.
+
+  B) Bluetooth (BLE GATT — what the phone app uses)
+       - This is the REAL control surface. EQ, sidetone, battery, everything.
+       - The phone app writes commands to a GATT characteristic and reads state.
+
+CONSEQUENCE: full control of the Barracuda on Linux requires a Bluetooth
+adapter on the PC (then talk BLE like the phone does). Over the 2.4 dongle
+alone you only get: audio playback + device recognition + connection state.
+
+--------------------------------------------------------------------------------
+ 2. THE 2.4 DONGLE HID PROTOCOL  (the "PI/PA" protocol)
+--------------------------------------------------------------------------------
+Reports are 64 bytes, HID report id 0x01, on interface 1.3.
+On Linux hidraw, write the FULL 64 bytes including the leading 0x01 (that 0x01
+IS the report id; do NOT prepend another — doing so shifts the frame into a
+different, dangerous bare-opcode space — see SAFETY).
+
+  COMMAND (host -> dongle), interrupt OUT ep 0x03:
+    01 80 <len> 50 41 <class> <txid> <subcmd> <param> [data...]
+      byte0  0x01   report id
+      byte1  0x80   magic
+      byte2  len    meaningful payload length (0x08 GET, 0x09 a 1-byte SET)
+      byte3  0x50   'P'  } signature "PA"
+      byte4  0x41   'A'  }
+      byte5  class  0x08 = settings/status
+      byte6  txid   transaction id (0x08 as captured; any value, reply = txid|0x80)
+      byte7  subcmd 0x03 = GET (read a param), 0x04 = SET (write a param)
+      byte8  param  parameter id
+      byte9+ data   for SET: 00 01 <value>
+
+  TELEMETRY (dongle -> host), interrupt IN ep 0x84, the "PI" report:
+    01 80 <len> 50 49 .. <param@13> <ch@14> 01 <value@16>
+    Match: rep[3]==0x50 && rep[4]==0x49 ; param=rep[13] ; value=rep[16]
+
+  WHAT ACTUALLY RESPONDS OVER 2.4 (tested live):
+    param 0x20  connection/link state  (0/1/2) — GET works, also pushed on change
+    param 0x01  some status flag        — GET works
+    Everything else (0x21 battery, 0x2a charging, 0x55 mic-mute, 0x1e, 0x9e ...)
+    is SILENT to GET and is not pushed unless a state-change event occurs.
+    Telemetry is NOT free-streaming; the dongle only pushes on events
+    (e.g. SmartSwitch / Bluetooth connect changes 0x20).
+
+  SET commands (0x98 sidetone, 0x99 level, 0xac power-saving, 0x93 EQ) are
+  ACCEPTED by the hidraw write() but have NO real effect over 2.4 on this unit.
+
+--------------------------------------------------------------------------------
+ 3. THE BLUETOOTH (BLE / ATT) CONTROL PROTOCOL  — decoded from the phone app
+--------------------------------------------------------------------------------
+Captured via Android Bluetooth HCI snoop while changing settings in the Razer
+app (method in section 6). The app talks BLE GATT (ATT, L2CAP CID 0x0004).
+
+  COMMAND = ATT Write to handle 0x0014, value = <param> 00 01 <value>
+    (this inner "<param> 00 01 <value>" is IDENTICAL to the 2.4 SET payload;
+     BLE just drops the 01 80 .. 50 41 08 08 04 wrapper.)
+
+  ATT opcodes seen: 0x52 = Write Command, 0x12 = Write Request, 0x04/0x08/0x10
+  = discovery/reads. The app also READS battery over BLE (param 0x21).
+
+  *** EQUALIZER (the headset's built-in hardware EQ) ***
+    handle 0x0014, value = 93 00 01 <preset>      i.e. param 0x93 = EQ preset
+      0x00  Default
+      0x01  Game
+      0x03  Movie
+      0x02  Music
+      0xff  Custom
+    Full BLE ATT write bytes, e.g. Game:  52 14 00 93 00 01 01
+    (chronological capture order over two passes: 00,01,03,02,ff / 00,01,03,02,ff)
+    No separate band-gain writes were seen — presets are firmware-stored; the
+    "Custom" slot's bands are configured elsewhere in the app.
+
+  BATTERY over BLE:  param 0x21 is read by the app directly (handle 0x0014
+  read/notify). So battery IS obtainable — over Bluetooth, not the dongle.
+
+  Other params the app polls over BLE: 0x21 (battery), 0x2a (charging),
+  0x20/0x25/0x26 (connection flags), 0x1e, 0x9e (status).
+
+--------------------------------------------------------------------------------
+ 4. FEATURE MAP (from the Synapse + app captures)
+--------------------------------------------------------------------------------
+  Built-in headset EQ      -> BLE param 0x93 (Default/Game/Movie/Music/Custom)
+  Sidetone (mic monitor)   -> param 0x98 on/off, 0x99 level 0..16  (BLE; not 2.4)
+  Power-saving auto-off     -> param 0xac minutes (0=off)           (BLE; not 2.4)
+  Battery %                -> param 0x21 (BLE read)
+  Charging                 -> param 0x2a (BLE read)
+  Mic mute / mic volume    -> standard USB-Audio-Class controls -> Linux mixer
+  Volume wheel             -> handled inside headset firmware, invisible to host
+  THX Spatial / Bass Boost / Sound Norm / Voice Clarity / Mic NC
+                           -> PC-side software DSP (reproduce with EasyEffects)
+
+--------------------------------------------------------------------------------
+ 5. OPENRAZER / POLYCHROMATIC INTEGRATION  (done — recognition only)
+--------------------------------------------------------------------------------
+The Barracuda was grafted onto OpenRazer so it appears as a real device:
+  - Kernel: added PID 0x053C to the razeraccessory driver (id_table, device_type
+    "Razer Barracuda 2.4", minimal probe branch that skips RGB + the dead-
+    transport "driver mode" set, with STATIC serial "BARRACUDA24" / firmware
+    "v1.0" / device_mode so the daemon registers cleanly).
+  - Daemon: class RazerBarracuda24 in hardware/headsets.py
+    (USB_VID 0x1532, USB_PID 0x053C, METHODS=['get_device_type_headset']).
+  - udev: /etc/udev/rules.d/99-razer-barracuda.rules replicates upstream's
+    chown-to-"openrazer"-group + razer_mount for 053C (upstream's list omits it),
+    and keeps the raw hidraw node readable by the "users" group.
+
+Result: shows in OpenRazer + Polychromatic as a headset (name/serial/firmware,
+"Device Info"). NO controls in the panel — the device has no RGB and battery is
+not reachable over 2.4, so there is nothing OpenRazer can expose to control.
+Build it with: sudo sh ~/barracuda-driver-backup/install_openrazer.sh ; reboot.
+Roll back with:  sudo sh ~/barracuda-driver-backup/rollback_openrazer.sh ; reboot.
+
+The OpenRazer ecosystem tools (RazerGenie C++/Qt, razerCommander GTK, razer-cli
+Python, RazerBatteryTray Python) are all just DBus frontends over openrazer-
+daemon. They read battery via openrazer.client device.battery_level +
+is_charging, gated on device.has('battery'). Since the Barracuda exposes no
+battery over OpenRazer, none of them can show its battery.
+
+--------------------------------------------------------------------------------
+ 6. HOW THE BLE CAPTURE WAS DONE (repeatable)
+--------------------------------------------------------------------------------
+  1. Phone Developer Options: enable "Wireless debugging" + "Bluetooth HCI
+     snoop log" = Enabled.
+  2. PC (android-tools/adb):
+        adb pair <phone-ip>:<pairing-port> <6-digit-code>
+        # the CONNECT port differs from the pairing port; scan for it:
+        #   scan 30000-60000 on the phone IP, adb connect each open port
+        adb connect <phone-ip>:<connect-port>
+     (Samsung note: shell defaults to Secure-Folder user 150 — use `--user 0`
+      for pm/package queries.)
+  3. Restart Bluetooth so the snoop starts FULL:
+        adb shell cmd bluetooth_manager disable ; ... enable
+        verify: dumpsys bluetooth_manager | grep sSnoopLogSettingAtEnable -> FULL
+  4. In the phone app, change the setting you want to decode (e.g. EQ presets).
+  5. Pull the log:  adb bugreport /tmp/btreport   (zip)
+     btsnoop is inside at:  FS/data/log/bt/btsnoop_hci.log
+  6. Decode:  python3 ~/barracuda-toolkit/btsnoop_decode.py <btsnoop>
+     Filter SENT ACL on L2CAP CID 0x0004 (ATT), look for writes to handle 0x14;
+     the EQ preset is the value byte that takes 5 distinct values.
+
+--------------------------------------------------------------------------------
+ 7. HARD LIMIT ON THIS PC
+--------------------------------------------------------------------------------
+This PC has NO Bluetooth adapter (no /sys/class/bluetooth, no rfkill bt, no USB
+BT dongle). Therefore the BLE control path — the ONLY path that actually changes
+EQ/sidetone/battery — is unavailable here. Over the 2.4 dongle alone the
+reachable feature set is: audio playback, OpenRazer/Polychromatic recognition,
+connection-state read. Battery %, EQ and sidetone CANNOT be controlled from this
+machine through the dongle.
+
+  To unlock everything: add a cheap USB Bluetooth adapter. Then a BLE client
+  (BlueZ / python-bleak) connects to the headset GATT and writes/reads handle
+  0x0014 exactly like the phone app — giving EQ (0x93), sidetone (0x98/0x99),
+  power-saving (0xac) and live battery (0x21). A battery tray (à la
+  RazerBatteryTray) would then read battery over BLE instead of OpenRazer.
+
+--------------------------------------------------------------------------------
+ 8. SAFETY (learned the hard way)
+--------------------------------------------------------------------------------
+  - Send ONLY correctly-framed "PA" frames (50 41 ...). The first data byte
+    after the report id must be 0x80, NOT a bare command byte.
+  - A blind/unframed bare-opcode sweep (byte0 = opcode) once hit an "enter
+    bootloader" command: PID flipped 053C -> 5020, manufacturer "Macronix",
+    audio died. Recovery = re-flash firmware via Synapse on Windows.
+  - Never sweep raw opcodes; never replay the pairing/bond class (0x06/0x07/0x0e)
+    commands on a working link (can drop the RF bond).
+  - GET (subcmd 0x03) reads are safe. SET (0x04) of a read-only param is harmless
+    but pointless over 2.4 (no effect).
+
+--------------------------------------------------------------------------------
+ 9. TOOLKIT FILES (~/barracuda-toolkit)
+--------------------------------------------------------------------------------
+  razer_barracuda_gui.py    PyQt6 control panel (connection, sidetone, power-
+                            saving, EQ presets, software-EQ launch). NOTE: the
+                            write controls only take effect over BLE, so on a
+                            no-Bluetooth PC they are inert; kept for when a BT
+                            adapter is added.
+  razer_barracuda.py        CLI (battery/status/sidetone/power-saving) over 2.4.
+  barracuda-control         launcher (sets Wayland env) + app-menu .desktop.
+  barracuda_record.py       full HID recorder (param sweep + passive capture).
+  btsnoop_decode.py         minimal btsnoop_hci.log decoder (BLE captures).
+  razer-barracuda-eq.json   EasyEffects 10-band preset (PC-side software EQ).
+  99-razer-barracuda.rules  udev (OpenRazer group + hidraw access).
+  Research/scratch + the OpenRazer driver patches + install/rollback scripts
+  live in ~/barracuda-driver-backup/.
+================================================================================

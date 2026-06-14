@@ -1,0 +1,4 @@
+#!/bin/sh
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+[ -z "$WAYLAND_DISPLAY" ] && export WAYLAND_DISPLAY=$(ls "$XDG_RUNTIME_DIR" 2>/dev/null | grep -m1 -E '^wayland-[0-9]+$')
+exec python3 "$(dirname "$(readlink -f "$0")")/razer_barracuda_gui.py" "$@"

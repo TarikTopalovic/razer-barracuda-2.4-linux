@@ -1,0 +1,3 @@
+# Razer Barracuda 2.4 (1532:053c) — allow non-root access to the vendor HID node
+# so userspace tools can read battery/charging and set sidetone/power-saving.
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1532", ATTRS{idProduct}=="053c", MODE="0660", GROUP="users", TAG+="uaccess"

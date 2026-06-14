@@ -1,0 +1,115 @@
+--- a/driver/razeraccessory_driver.c
++++ b/driver/razeraccessory_driver.c
+@@ -233,6 +233,10 @@
+         device_type = "Razer Tomahawk ATX";
+         break;
+ 
++    case USB_DEVICE_ID_RAZER_BARRACUDA_2_4:
++        device_type = "Razer Barracuda 2.4";
++        break;
++
+     default:
+         device_type = "Unknown Device";
+         break;
+@@ -1141,6 +1145,13 @@
+         serial_string[22] = '\0';
+         break;
+ 
++    case USB_DEVICE_ID_RAZER_BARRACUDA_2_4:
++        // Vendor (PI/PA) protocol; no serial over the legacy transport. Use a
++        // stable static string so the daemon can register the device cleanly.
++        strncpy(&serial_string[0], "BARRACUDA24", sizeof(serial_string));
++        serial_string[sizeof(serial_string) - 1] = '\0';
++        break;
++
+     default:
+         printk(KERN_WARNING "razeraccessory: Unknown device\n");
+         return -EINVAL;
+@@ -1200,6 +1211,10 @@
+         request.transaction_id.id = 0xFF;
+         break;
+ 
++    case USB_DEVICE_ID_RAZER_BARRACUDA_2_4:
++        // Vendor (PI/PA) protocol; firmware not exposed over legacy transport.
++        return sprintf(buf, "v1.0\n");
++
+     default:
+         printk(KERN_WARNING "razeraccessory: Unknown device\n");
+         return -EINVAL;
+@@ -1260,6 +1275,11 @@
+         request.transaction_id.id = 0xFF;
+         break;
+ 
++    case USB_DEVICE_ID_RAZER_BARRACUDA_2_4:
++        // Vendor (PI/PA) protocol; accept the mode write but no-op it (the
++        // legacy transport is unsupported). Lets the daemon set "driver mode".
++        return count;
++
+     default:
+         printk(KERN_WARNING "razeraccessory: Unknown device\n");
+         return -EINVAL;
+@@ -1331,6 +1351,12 @@
+         request.transaction_id.id = 0xFF;
+         break;
+ 
++    case USB_DEVICE_ID_RAZER_BARRACUDA_2_4:
++        // Vendor (PI/PA) protocol; report a static mode (no legacy transport).
++        buf[0] = 0x00;
++        buf[1] = 0x00;
++        return 2;
++
+     default:
+         printk(KERN_WARNING "razeraccessory: Unknown device\n");
+         return -EINVAL;
+@@ -2379,6 +2405,7 @@
+     case USB_DEVICE_ID_RAZER_CHARGING_PAD_CHROMA:
+     case USB_DEVICE_ID_RAZER_RAPTOR_27:
+     case USB_DEVICE_ID_RAZER_CHROMA_ADDRESSABLE_RGB_CONTROLLER:
++    case USB_DEVICE_ID_RAZER_BARRACUDA_2_4:
+         expected_protocol = 0;
+         break;
+ 
+@@ -2409,6 +2436,19 @@
+     }
+ 
+     if(dev->usb_interface_protocol == expected_protocol) {
++        // Razer Barracuda 2.4: vendor (PI/PA) protocol, no RGB. Register basic
++        // nodes only and skip the RGB/effect files + the "Driver mode" set
++        // (which uses the legacy report transport this device does not speak).
++        if(usb_dev->descriptor.idProduct == USB_DEVICE_ID_RAZER_BARRACUDA_2_4) {
++            CREATE_DEVICE_FILE(&hdev->dev, &dev_attr_version);
++            CREATE_DEVICE_FILE(&hdev->dev, &dev_attr_test);
++            CREATE_DEVICE_FILE(&hdev->dev, &dev_attr_device_type);
++            CREATE_DEVICE_FILE(&hdev->dev, &dev_attr_device_mode);
++            CREATE_DEVICE_FILE(&hdev->dev, &dev_attr_device_serial);
++            CREATE_DEVICE_FILE(&hdev->dev, &dev_attr_firmware_version);
++            goto barracuda_skip;
++        }
++
+         CREATE_DEVICE_FILE(&hdev->dev, &dev_attr_version);                               // Get driver version
+         CREATE_DEVICE_FILE(&hdev->dev, &dev_attr_test);                                  // Test mode
+         CREATE_DEVICE_FILE(&hdev->dev, &dev_attr_device_type);                           // Get string of device type
+@@ -2587,6 +2627,7 @@
+         }
+     }
+ 
++barracuda_skip:
+     hid_set_drvdata(hdev, dev);
+     dev_set_drvdata(&hdev->dev, dev);
+ 
+@@ -2632,6 +2673,7 @@
+     case USB_DEVICE_ID_RAZER_CHARGING_PAD_CHROMA:
+     case USB_DEVICE_ID_RAZER_RAPTOR_27:
+     case USB_DEVICE_ID_RAZER_CHROMA_ADDRESSABLE_RGB_CONTROLLER:
++    case USB_DEVICE_ID_RAZER_BARRACUDA_2_4:
+         expected_protocol = 0;
+         break;
+ 
+@@ -2869,6 +2911,7 @@
+     { HID_USB_DEVICE(USB_VENDOR_ID_RAZER,USB_DEVICE_ID_RAZER_LAPTOP_STAND_CHROMA_V2) },
+     { HID_USB_DEVICE(USB_VENDOR_ID_RAZER,USB_DEVICE_ID_RAZER_LIANLI_O11_DYNAMIC) },
+     { HID_USB_DEVICE(USB_VENDOR_ID_RAZER,USB_DEVICE_ID_RAZER_TOMAHAWK_ATX) },
++    { HID_USB_DEVICE(USB_VENDOR_ID_RAZER,USB_DEVICE_ID_RAZER_BARRACUDA_2_4) },
+     { 0 }
+ };
+ 
