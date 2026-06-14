@@ -10,6 +10,11 @@ both the USB dongle traffic and the Razer mobile app's Bluetooth traffic.
 
 > Full technical write-up: [`FINDINGS.txt`](FINDINGS.txt)
 
+![Barracuda 2.4 control panel — 10-band headphone EQ](docs/screenshot-sound.png)
+
+*Standalone PyQt6 control panel (Synapse-style): live 10-band headphone + mic EQ,
+profiles/favourites, sidetone, power, and device status — all native on Linux.*
+
 ## TL;DR — what works where
 
 | Feature | 2.4 GHz dongle (USB) | Bluetooth (GATT) |

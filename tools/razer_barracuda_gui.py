@@ -485,8 +485,12 @@ class EQSection(QtWidgets.QWidget):
         sb.setCursor(Qt.CursorShape.PointingHandCursor); sb.clicked.connect(self._save)
         save.addWidget(self.save_name, 1); save.addWidget(sb)
         v.addLayout(save)
+        cur = current_fn()
+        match = next((n for n, gn in self._all().items() if list(gn) == list(cur)), None)
+        if match:
+            self._current = match
         self._rebuild()
-        for b, g in zip(self.bands, current_fn()):
+        for b, g in zip(self.bands, cur):
             b.s.blockSignals(True); b.s.setValue(g); b.val.setText(f"{g:+d}" if g else "0"); b.s.blockSignals(False)
 
     def _all(self):
@@ -673,9 +677,10 @@ class Panel(QtWidgets.QMainWindow):
         save.addWidget(self.save_name, 1); save.addWidget(sb)
         card.v.addLayout(save)
         v.addWidget(card); v.addStretch()
-        self._current = "Flat"
+        cur = eq_current()
+        self._current = next((n for n, gn in self._all_profiles().items() if list(gn) == list(cur)), "Flat")
         self._rebuild_profiles()
-        for b, g in zip(self.eq_bands, eq_current()):
+        for b, g in zip(self.eq_bands, cur):
             b.s.blockSignals(True); b.s.setValue(g); b.val.setText(f"{g:+d}" if g else "0"); b.s.blockSignals(False)
         return w
 
@@ -857,7 +862,10 @@ class Panel(QtWidgets.QMainWindow):
         self.batlbl.setText((f"{batt}%  " + ("charging" if chg else "")) if ok
                             else ("connected" if link is not None else "not on 2.4"))
         if self._model is None:
-            self._model = self.dev.get_string(0x00) or "Barracuda 2.4"
+            m = self.dev.get_string(0x00)
+            # dongle returns a truncated model string ("IN2"); the full marketing
+            # model is IN2447 (confirmed over BLE) — normalize it for display.
+            self._model = ("IN2447" if m and m.startswith("IN2") else (m or "Barracuda 2.4"))
         self.i_model.setText(self._model)
         self.i_fw.setText("v1.0")
         self.i_conn.setText("2.4 GHz" if link is not None else "not linked")
