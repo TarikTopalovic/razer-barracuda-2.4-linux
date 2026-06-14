@@ -245,4 +245,84 @@ machine through the dongle.
   only fresh EQ-over-2.4 leads, but unconfirmed (need slider-correlation).
   Most other ids return a constant 0x01 = default/unimplemented, not real
   toggles. Reproduce: tools/barracuda_param_sweep.py.
+
+--------------------------------------------------------------------------------
+ 11. AUDIO PATH: USB transport, latency, crackle, dropouts (PipeWire/ALSA)
+--------------------------------------------------------------------------------
+  The dongle is a class-compliant USB audio device, but a CONSTRAINED one, and
+  almost every "it sounds bad" symptom traces back to that. Hard facts measured:
+
+  TRANSPORT
+  - USB 1.1 FULL-SPEED, 12 Mbps (lsusb -t shows 12M; /sys .../speed = 12).
+    Output stereo + input mono share that one 12 Mbps pipe.
+  - Output: alsa_output...analog-stereo, S16_LE 2ch 48000.
+  - Input : alsa_input...mono-fallback, S16_LE 1ch 48000 (Interface 2). The mic
+    is mono 48k native -> NO resample mismatch; do not blame the rate.
+  - Card name carries "Macronix" (the dongle's flash vendor), serial ...1234.
+
+  LATENCY (the "laggy in games" complaint)
+  - Cause: USB 1.1 + a large default PipeWire quantum (~2048 = ~42 ms buffer),
+    on top of the ~30 ms inherent 2.4 GHz radio latency. Zero xruns -> it was
+    buffering, not dropping.
+  - Fix: lower the PipeWire quantum. pipewire/98-low-latency.conf sets
+    quantum 512 (~10 ms), min 256, max 1024. Live test:
+      pw-metadata -n settings 0 clock.force-quantum 256
+  - Floor = the radio (~30 ms) + USB 1.1 minimum buffer. Below ~256 quantum the
+    USB 1.1 link can't keep up and crackles. Total ~= radio + buffer.
+
+  MIC "BRR" / "GOES OUT OF BOUNDS" = CLIPPING, not buffering
+  - Root cause: ALSA capture gain ('Mic' control, range 0..67) defaulted to 67 =
+    0 dB = ZERO headroom. The PipeWire capture path was provably clean (pw-top
+    ERR=0, 0 sample-jumps even full-duplex) -- the distortion was the ADC
+    clipping on loud speech before PipeWire ever saw it.
+  - Fix: give headroom -> amixer -c<card> sset 'Mic' 57  (~ -5 dB). Lower more if
+    it still clips. (card index from aplay -l / /proc/asound/cards.)
+  - Plus a boomy low end: see the mic EQ below.
+
+  MIC CRACKLE on app-open (pop, not continuous)
+  - The capture node SUSPENDS when idle; resume pops/crackles on a wireless USB
+    device. Fix: never-suspend the node (wireplumber/51-barracuda-mic.conf,
+    session.suspend-timeout-seconds = 0, node.pause-on-idle = false).
+  - DEAD END: forcing api.alsa.period-size / period-num on this USB 1.1
+    full-speed device GARBLES the isochronous packing and makes it worse. Let
+    PipeWire auto-negotiate native periods; only api.alsa.headroom is safe.
+
+  MIC EQ (built, voice cleanup)
+  - PipeWire filter-chain -> virtual source "Barracuda Mic (clean)":
+    fixed 75 Hz high-pass (kills the rumble/plosive energy behind the "brr") +
+    10 adjustable bands mic0..mic9, driven live from the GUI exactly like the
+    headphone EQ. pipewire/97-barracuda-mic-eq.conf. rnnoise is installed as a
+    bare lib (/usr/lib/librnnoise.so) but with NO LADSPA wrapper, so noise
+    suppression needs noise-suppression-for-voice (AUR) before it can be chained.
+
+  RANDOM ~1s DROPOUTS = RF, surfacing as a USB clock fault
+  - Kernel logs at the exact moment of a drop:
+      usb 1-1: 1:1: cannot get freq at ep 0x7
+    This is NOT a USB disconnect (device stays enumerated; no reset/re-enumerate
+    lines, autosuspend already off). It's snd-usb-audio failing to read the
+    sample clock off the iso endpoint because the 2.4 GHz link lost packets for
+    ~1 s and the dongle's USB side stalled. Infrequent (matched "every so
+    often" -- 1 event/boot when observed).
+  - What software CAN do (all applied):
+      * never-suspend OUTPUT + input  -> kills the resume/clock-reinit drop class
+        (every idle->resume re-inits the clock = a fresh chance to hit the
+        "cannot get freq" path). wireplumber/51-barracuda-mic.conf.
+      * lock the rate to a single 48000 (clock.allowed-rates = [ 48000 ]) so the
+        clock is never renegotiated mid-use.
+      * output cushion: api.alsa.headroom ~2048 frames (~42 ms) on the SINK ONLY
+        -> rides through a brief RF stall without starving the DAC, while the
+        PipeWire quantum (gaming latency) stays at 512.
+      * headset power-saving off (param 0xac = 0, via razer_barracuda.py) so the
+        link never idles down. NOTE: resets when the headset fully powers off.
+  - What software CANNOT do: stop the actual 2.4 GHz packet loss. That is
+    physical -- dongle on a USB-C extension out in open air (off the case / away
+    from USB3 ports, both spray 2.4 GHz noise), 2.4 GHz Wi-Fi on a clear channel,
+    line-of-sight dongle<->headset. Diagnose recurrence with:
+      journalctl -k -b | grep "cannot get freq"   (count + timestamps)
+      pw-top                                       (ERR column = underruns)
+
+  KEY TAKEAWAY: this is a single-rate (48 kHz), single-buffer, half-duplex
+  wireless USB 1.1 device. Lock the rate, never suspend it, give the output a
+  little headroom, keep input latency low -- and accept that the radio sets a
+  hard floor that only physical placement improves.
 ================================================================================

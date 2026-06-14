@@ -67,3 +67,25 @@ Barracuda is a **USB 1.1 full-speed** device, so total latency ≈ the 2.4 GHz
 radio (~30 ms, fixed) + this buffer. Lower the quantum for less lag, raise it
 (768/1024) if you get crackling; below ~256 USB 1.1 can't keep up and crackles.
 Watch the **ERR** column in `pw-top` — climbing = underruns, back off.
+
+## Random ~1-second dropouts
+If audio cuts out for ~1s "every so often", check the kernel log at that moment:
+```
+journalctl -k -b | grep "cannot get freq"
+```
+`usb 1-1: 1:1: cannot get freq at ep 0x7` = **not** a USB disconnect (the device
+stays enumerated). It's the audio driver failing to read the sample clock off the
+dongle because the **2.4 GHz radio lost packets** for ~1s. Software mitigations
+(all in `../wireplumber/51-barracuda-mic.conf` + the rate lock + power-saving):
+- **never-suspend** the output *and* input nodes — every idle→resume re-inits the
+  USB clock, which is exactly when that error fires;
+- **lock the rate** to a single 48000 (`clock.allowed-rates = [ 48000 ]`) so it's
+  never renegotiated;
+- **output cushion** `api.alsa.headroom ≈ 2048` on the sink only — rides through a
+  brief RF stall without touching gaming/input latency;
+- **headset power-saving off** (`razer_barracuda.py power-saving off`) so the link
+  never idles down (resets if the headset fully powers off).
+
+Software can't stop the actual packet loss — that's physical: dongle on a USB-C
+extension out in open air (off the case / away from USB3 ports), 2.4 GHz Wi-Fi on
+a clear channel, line-of-sight to the headset. See `FINDINGS.txt` §11.
