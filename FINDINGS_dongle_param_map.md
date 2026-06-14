@@ -36,7 +36,7 @@ interesting params are the ones with non-trivial or structured values below.
 | `0x15` | count + `[5,5,5,5,5]` | flat 5-element array — EQ/tuning candidate (low) |
 | `0x17` | count + `[5,6,7,7,8]` | rising 5-element array — EQ/tuning candidate (low) |
 | `0x1e` | `0x0a` (10) | status scalar (known from earlier captures) |
-| `0x20` | ch01=`1`; ch02=26-byte struct | connection/link state (high) |
+| `0x20` | ch01=`1`, ch02=`0` | connection/link state (high) |
 | `0x21` | ch01=ch02=`0x1c` (28) | **battery % = 28** (high) |
 | `0x25` | `0x02` | unknown enum (low) |
 | `0x2a` | ch01=ch02=`0` | **charging = 0/not charging** (high) |
@@ -71,3 +71,7 @@ interesting params are the ones with non-trivial or structured values below.
   toggle. Don't over-read those.
 - Values are a single snapshot; params that only change on events (button
   presses, connect/disconnect) read their idle state here.
+- The dongle sometimes coalesces two PI reports into one interrupt transfer, so
+  a reply can look like an oversized struct (e.g. a `0x62` reply with a `0x63`
+  reply appended). Parse by the `PI` signature + inner length, not by transfer
+  size, and don't mistake the trailing report for struct data.
