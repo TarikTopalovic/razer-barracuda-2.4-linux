@@ -218,11 +218,11 @@ machine through the dongle.
 --------------------------------------------------------------------------------
  9. TOOLKIT FILES (~/barracuda-toolkit)
 --------------------------------------------------------------------------------
-  razer_barracuda_gui.py    PyQt6 control panel (connection, sidetone, power-
-                            saving, EQ presets, software-EQ launch). NOTE: the
-                            write controls only take effect over BLE, so on a
-                            no-Bluetooth PC they are inert; kept for when a BT
-                            adapter is added.
+  razer_barracuda_gui.py    PyQt6 control panel: battery/charging ring (RF
+                            refresh), connection, sidetone (0x98/0x99) and
+                            power-saving (0xac) — all real over-2.4 commands.
+                            EQ is software-only (EasyEffects launcher); the
+                            headset's built-in EQ is Bluetooth-only.
   razer_barracuda.py        CLI (battery/status/sidetone/power-saving) over 2.4.
   barracuda_param_sweep.py  read-only GET sweep 0x00..0xff -> dongle param map.
   barracuda-control         launcher (sets Wayland env) + app-menu .desktop.

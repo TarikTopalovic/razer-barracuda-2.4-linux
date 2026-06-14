@@ -3,9 +3,11 @@
 Razer Barracuda 2.4 — control panel (PyQt6), polished dark UI.
 
 Uses the reverse-engineered vendor (PI/PA) HID protocol over raw hidraw to expose
-every Linux-usable feature: connection state, sidetone, power-saving, EQ launch.
-Battery is polled best-effort (device gates it behind a Synapse telemetry-enable).
-Only exact captured frames are sent — no opcode guessing.
+every dongle-controllable feature: battery/charging read, connection state,
+sidetone, and power-saving — all verified over the 2.4 dongle using the exact
+frames Synapse itself sends. Audio EQ / THX Spatial are PC-side DSP (not headset
+commands over 2.4), so EQ is delegated to EasyEffects. Only exact captured
+frames are sent — no opcode guessing.
 """
 import glob
 import json
@@ -20,15 +22,10 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from PyQt6.QtCore import Qt, QPropertyAnimation, pyqtProperty, QRectF, QPointF, QEasingCurve
 
 VID_PID = "00001532:0000053C"
-# Headset BUILT-IN equalizer — selected by vendor param 0x93 (reverse-engineered
-# from the Razer mobile app's BLE traffic; applied live over the 2.4 dongle).
-EQ_PRESETS = {
-    "Default": 0x00,
-    "Game":    0x01,
-    "Movie":   0x03,
-    "Music":   0x02,
-    "Custom":  0xff,
-}
+# NOTE: the headset's built-in EQ (vendor param 0x93) is reachable over Bluetooth
+# only. Over the 2.4 dongle a SET 0x93 is ACK'd but ignored (verified) — Synapse
+# applies EQ as PC-side audio DSP, not a headset command. So this dongle GUI does
+# EQ via EasyEffects (software) instead of pretending 0x93 works here.
 GREEN = "#44d62c"
 GREEN_Q = QtGui.QColor(0x44, 0xd6, 0x2c)
 BG = "#08090a"
@@ -110,6 +107,19 @@ class Barracuda:
             return
         try:
             os.write(self.fd, self._frame(0x04, param, 0x09, bytes([0x00, 0x01, value & 0xff])))
+        except OSError:
+            self.open()
+
+    def refresh_telemetry(self):
+        """Poke the dongle to pull fresh battery/charging from the headset over
+        2.4 (class 0x0e / param 0xe1). Without this a cold dongle returns no
+        battery value — Synapse sends this before each battery poll."""
+        if not self.fd:
+            return
+        b = bytearray(64)
+        b[0:10] = bytes([0x01, 0x80, 0x07, 0x50, 0x41, 0x0e, 0x08, 0x02, 0xe1, 0x01])
+        try:
+            os.write(self.fd, bytes(b))
         except OSError:
             self.open()
 
@@ -315,23 +325,16 @@ class Panel(QtWidgets.QMainWindow):
         pc.v.addLayout(seg)
         body.addWidget(pc)
 
-        # ---- equalizer (quick presets, PC-side DSP via EasyEffects)
-        ec = Card("EQUALIZER · built-in headset presets")
-        grid = QtWidgets.QGridLayout()
-        grid.setSpacing(8)
-        self.eq_group = QtWidgets.QButtonGroup(self)
-        for i, name in enumerate(EQ_PRESETS):
-            b = QtWidgets.QPushButton(name)
-            b.setObjectName("eq")
-            b.setCheckable(True)
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            if name == "Default":
-                b.setChecked(True)
-            b.clicked.connect(lambda _, n=name: self.apply_eq(n))
-            self.eq_group.addButton(b)
-            grid.addWidget(b, i // 3, i % 3)
-        ec.v.addLayout(grid)
-        eqb = QtWidgets.QPushButton("Software EQ bands…  (EasyEffects)")
+        # ---- equalizer (PC-side DSP via EasyEffects; headset EQ is BLE-only)
+        ec = Card("EQUALIZER · software (EasyEffects)")
+        note = QtWidgets.QLabel(
+            "The headset's built-in EQ is Bluetooth-only — over the 2.4 dongle a "
+            "preset write is ignored (Synapse applies EQ as PC-side DSP). Use the "
+            "software EQ below for a 10-band preset on the Barracuda output.")
+        note.setObjectName("hint")
+        note.setWordWrap(True)
+        ec.v.addWidget(note)
+        eqb = QtWidgets.QPushButton("Open software EQ…  (EasyEffects)")
         eqb.setObjectName("ghost")
         eqb.setCursor(Qt.CursorShape.PointingHandCursor)
         eqb.clicked.connect(self.open_eq)
@@ -364,11 +367,6 @@ class Panel(QtWidgets.QMainWindow):
         self.dev.set(0xac, m)
         self._flash("Power-saving " + ("off" if m == 0 else f"· {m} min"))
 
-    def apply_eq(self, name):
-        # Built-in headset EQ: vendor param 0x93 = preset id, applied over the dongle.
-        self.dev.set(0x93, EQ_PRESETS[name])
-        self._flash(f"Headset EQ → {name}")
-
     def open_eq(self):
         if shutil.which("easyeffects"):
             dst = os.path.expanduser("~/.config/easyeffects/output/razer-barracuda-eq.json")
@@ -400,6 +398,8 @@ class Panel(QtWidgets.QMainWindow):
         else:
             self.pill.setText("● off / dongle only")
             self.pill.setStyleSheet("color:#5a6066;")
+        self.dev.refresh_telemetry()        # arm fresh battery/charging over RF
+        time.sleep(0.05)
         batt = self.dev.get(0x21)
         chg = self.dev.get(0x2a)
         self.ring.set_value(batt if (batt is not None and 0 <= batt <= 100) else None, bool(chg))
