@@ -82,8 +82,16 @@ different, dangerous bare-opcode space — see SAFETY).
     byte16. Without the refresh a cold dongle has nothing fresh to return.
     Other params (0x55 mic-mute, 0x1e, 0x9e ...) are pushed on state-change.
 
-  SET commands (0x98 sidetone, 0x99 level, 0xac power-saving, 0x93 EQ) are
-  ACCEPTED by the hidraw write() but have NO real effect over 2.4 on this unit.
+  SET commands — CORRECTED (UI-driven capture, see FINDINGS_synapse_ui_capture.md):
+    0x98 sidetone on/off + 0x99 level, and 0xac power-saving (minutes) ARE real
+    over-2.4 commands — Synapse sends these exact frames when you toggle the
+    controls. SET frame: 01 80 09 50 41 08 08 04 <param> 00 01 <value>.
+    0x93 EQ / THX / Mic-NC are NOT device commands at all: Synapse applies them
+    as PC-side audio DSP and sends nothing to the headset over 2.4 (an EQ change
+    only pings a housekeeping flag 0x9e=0). So EQ stays host-side/BLE; sidetone
+    and power-saving work over the dongle. (The earlier "no effect" line was a
+    bad-signal artifact: these params are write-only over 2.4 so GET readback
+    can't see them, and sidetone makes little/no USB stream.)
 
 --------------------------------------------------------------------------------
  3. THE BLUETOOTH (BLE / ATT) CONTROL PROTOCOL  — decoded from the phone app

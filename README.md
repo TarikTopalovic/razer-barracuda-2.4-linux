@@ -19,16 +19,22 @@ both the USB dongle traffic and the Razer mobile app's Bluetooth traffic.
 | Connection-state read (`param 0x20`) | ✅ | ✅ |
 | **Battery %** (`param 0x21`) | ✅ (after RF refresh) | ✅ |
 | **Charging** (`param 0x2a`) | ✅ (after RF refresh) | ✅ |
-| **Equalizer** (`param 0x93`) | ❌ no effect | ✅ |
-| **Sidetone** (`0x98/0x99`) / power-saving (`0xac`) | ❌ no effect | ✅ |
+| **Sidetone** (`0x98/0x99`) | ✅ real command | ✅ |
+| **Power-saving** (`0xac`) | ✅ real command | ✅ |
+| **Equalizer** / THX / Mic-NC | ❌ PC-side DSP (not a device command) | EQ ✅ via BLE |
 | Mic mute / volume | system mixer (USB audio) | — |
 
 **Battery/charging read over the 2.4 dongle — no Bluetooth needed.** Send the
 RF-refresh frame (`01 80 07 50 41 0e 08 02 e1 01`, class `0x0e` / param `0xe1`)
 to make the dongle pull a fresh value from the headset, then `GET 0x21` / `0x2a`.
-(Earlier notes claimed "not relayed" — that was a missing-refresh bug, now fixed
-in `tools/razer_barracuda.py`.) EQ and sidetone still have no effect over 2.4
-(Synapse applies EQ as PC-side DSP), so those remain Bluetooth-only.
+
+**Sidetone and power-saving are real over-dongle commands** — verified by
+driving Synapse and watching the bus: enabling sidetone sends `SET 0x98=1` +
+`SET 0x99=<level>`, the power-saving slider sends `SET 0xac=<minutes>`. EQ, THX
+Spatial and Mic Noise Cancellation are **not** device commands at all — Synapse
+applies them in the Windows audio pipeline (PC-side DSP), so over 2.4 there is
+nothing to send; on Linux replicate them with EasyEffects. See
+[`FINDINGS_synapse_ui_capture.md`](FINDINGS_synapse_ui_capture.md).
 
 ## The protocol (short version)
 
