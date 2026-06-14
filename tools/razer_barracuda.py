@@ -11,14 +11,17 @@ Transport (verified):
       subcmd 0x03 = GET (read a param), 0x04 = SET (write a param).
 
 What works today:
+  - battery % (0x21) / charging (0x2a) : GET after an RF refresh   [verified]
   - sidetone (mic monitoring)  : SET 0x98 on/off, 0x99 level   [verified-safe]
   - power-saving auto-off      : SET 0xac minutes (0=off)       [verified-safe]
   - status reads               : params 0x20/0x01 answer on demand
-What is pending one more capture:
-  - battery % (0x21) / charging (0x2a): the dongle only relays these after Synapse
-    sends a "telemetry-enable" command at startup, which we have not captured yet.
-    This tool's battery reader is correct and will return data the moment the
-    dongle surfaces it (e.g. once that enable command is known/sent).
+
+Battery note (corrected): there is NO "telemetry-enable" command. The dongle
+answers a plain GET 0x21 even when cold-plugged. The catch is that Synapse sends
+an RF-refresh frame (class 0x0e, param 0xe1) before each battery poll, which
+pokes the dongle to fetch a fresh value from the headset over 2.4GHz. Send that
+refresh first and battery/charging read back directly. Verified on a
+power-cycled dongle via USBPcap capture (battery 0x1d = 29%, charging 0).
 
 SAFETY: only the exact byte frames captured from Synapse are ever sent. No
 opcode guessing — blind writes can drop the device into bootloader mode.
@@ -39,6 +42,7 @@ import time
 
 VID_PID = "00001532:0000053C"
 CLASS = 0x08
+RF_CLASS = 0x0e       # RF/link class (battery/charging refresh lives here)
 TXID = 0x08            # matches the captured frames exactly
 SUB_GET = 0x03
 SUB_SET = 0x04
@@ -115,6 +119,27 @@ def set_param(fd, param, value):
     os.write(fd, _frame(SUB_SET, param, 0x09, bytes([0x00, 0x01, value & 0xff])))
 
 
+def rf_refresh(fd):
+    """Poke the dongle to pull fresh battery/charging from the headset over 2.4GHz.
+    Captured frame: 01 80 07 50 41 0e 08 02 e1 01. Synapse sends this before each
+    battery poll; without it a cold dongle has no fresh value to return."""
+    b = bytearray(64)
+    b[0] = 0x01           # report id
+    b[1] = 0x80           # magic
+    b[2] = 0x07           # payload length
+    b[3] = 0x50           # 'P'
+    b[4] = 0x41           # 'A'
+    b[5] = RF_CLASS       # 0x0e
+    b[6] = TXID
+    b[7] = 0x02           # subcmd
+    b[8] = 0xe1           # param
+    b[9] = 0x01           # value
+    try:
+        os.write(fd, bytes(b))
+    except OSError:
+        pass
+
+
 # ----------------------------------------------------------------- commands
 def cmd_battery(args):
     fd = open_dev()
@@ -122,6 +147,8 @@ def cmd_battery(args):
     as_json = "--json" in args
     try:
         def read():
+            rf_refresh(fd)            # poke dongle to fetch fresh values over RF
+            time.sleep(0.05)
             return get_param(fd, 0x21), get_param(fd, 0x2a)
         if watch:
             last = None
@@ -145,8 +172,7 @@ def _emit(batt, chg, as_json):
         print(json.dumps({"battery": batt,
                           "charging": (bool(chg) if chg is not None else None)}))
     elif batt is None:
-        print("battery: unavailable — dongle is not reporting telemetry yet "
-              "(needs the Synapse-startup telemetry-enable command; see README).")
+        print("battery: unavailable — headset may be off/unlinked or asleep.")
     else:
         print(f"{batt}%" + (" (charging)" if chg else ""))
 
@@ -154,6 +180,8 @@ def _emit(batt, chg, as_json):
 def cmd_status(args):
     fd = open_dev()
     try:
+        rf_refresh(fd)            # surface fresh battery/charging before sweeping
+        time.sleep(0.05)
         print("params answering right now:")
         any_hit = False
         for p in range(0x100):
