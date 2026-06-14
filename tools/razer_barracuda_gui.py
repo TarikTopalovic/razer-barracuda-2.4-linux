@@ -161,23 +161,80 @@ def eq_current():
     return g
 
 
+# ----------------------------------------------------------------- mic EQ (PipeWire)
+MIC_EQ_CONF = os.path.expanduser("~/.config/pipewire/pipewire.conf.d/97-barracuda-mic-eq.conf")
+MIC_EQ_LABELS = ["100", "200", "300", "500", "800", "1.5k", "3k", "5k", "8k", "12k"]
+MIC_EQ_PRESETS = {
+    "Flat":       [0,  0,  0,  0,  0,  0,  0,  0,  0,  0],   # high-pass only, no shaping
+    "Clarity":    [-2, -1, -2, -1, 0,  1,  3,  3,  2,  1],   # clean, intelligible (default)
+    "Warm":       [2,  1,  0,  0,  0,  0, -1, -2, -1, -1],   # fuller, softer top
+    "Bright":     [-3, -2, -1, 0,  1,  2,  3,  4,  3,  2],   # crisp, airy
+    "Broadcast":  [-1, 0, -2, -1, -2, 0,  2,  3,  2,  1],   # radio voice, scooped mids
+    "Deep":       [3,  3,  2,  1,  0, -1, -1,  0,  0,  0],   # deeper, bigger voice
+    "Anti-Pop":   [-6, -4, -2, -1, 0,  1,  2,  2,  1,  0],   # hard low cut for plosives
+    "Telephone":  [-6, -4, 0,  2,  3,  3,  1, -2, -4, -6],   # thin comms/walkie sound
+}
+
+
+def mic_eq_node():
+    try:
+        for o in json.loads(_run("pw-dump")):
+            if o.get("info", {}).get("props", {}).get("node.name") == "barracuda_mic_in":
+                return str(o["id"])
+    except Exception:
+        pass
+    return None
+
+
+def mic_eq_apply(gains):
+    nid = mic_eq_node()
+    if not nid:
+        return False
+    params = " ".join(f'"mic{i}:Gain" {float(g)}' for i, g in enumerate(gains))
+    subprocess.run(["pw-cli", "set-param", nid, "Props", "{ params = [ %s ] }" % params],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        txt = open(MIC_EQ_CONF).read()
+        for i, g in enumerate(gains):
+            txt = re.sub(rf'(name = mic{i} control = \{{[^}}]*?"Gain" = )[-0-9.]+',
+                         lambda m, gg=g: m.group(1) + str(float(gg)), txt)
+        open(MIC_EQ_CONF, "w").write(txt)
+    except OSError:
+        pass
+    return True
+
+
+def mic_eq_current():
+    g = [0] * 10
+    try:
+        txt = open(MIC_EQ_CONF).read()
+        for i in range(10):
+            m = re.search(rf'name = mic{i} control = \{{[^}}]*?"Gain" = ([-0-9.]+)', txt)
+            if m:
+                g[i] = int(round(float(m.group(1))))
+    except OSError:
+        pass
+    return g
+
+
 # ----------------------------------------------------------------- user profiles
 PROFILES_PATH = os.path.expanduser("~/.config/barracuda-eq/profiles.json")
+MIC_PROFILES_PATH = os.path.expanduser("~/.config/barracuda-eq/mic-profiles.json")
 
 
-def load_profiles():
+def load_profiles(path=PROFILES_PATH):
     try:
-        d = json.load(open(PROFILES_PATH))
+        d = json.load(open(path))
         return dict(d.get("custom", {})), list(d.get("favorites", []))
     except Exception:
         return {}, []
 
 
-def save_profiles(custom, favorites):
+def save_profiles(custom, favorites, path=PROFILES_PATH):
     try:
-        os.makedirs(os.path.dirname(PROFILES_PATH), exist_ok=True)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         json.dump({"custom": custom, "favorites": favorites},
-                  open(PROFILES_PATH, "w"), indent=2)
+                  open(path, "w"), indent=2)
     except OSError:
         pass
 
@@ -387,6 +444,129 @@ class EQBand(QtWidgets.QWidget):
         v.addWidget(cap)
 
 
+class EQSection(QtWidgets.QWidget):
+    """Self-contained EQ: favourites row + profile dropdown + bands + save.
+    Reusable — pass labels, presets, profile-store path, and apply/current fns."""
+    def __init__(self, labels, presets, profiles_path, apply_fn, current_fn, default="Flat"):
+        super().__init__()
+        self._presets = presets
+        self._path = profiles_path
+        self._apply_fn = apply_fn
+        self.custom, self.favs = load_profiles(profiles_path)
+        self._current = default if default in presets else next(iter(presets))
+        v = QtWidgets.QVBoxLayout(self); v.setContentsMargins(0, 0, 0, 0); v.setSpacing(14)
+        # favourites quick-row
+        self.fav_host = QtWidgets.QWidget()
+        self.fav_row = QtWidgets.QHBoxLayout(self.fav_host)
+        self.fav_row.setContentsMargins(0, 0, 0, 0); self.fav_row.setSpacing(8)
+        v.addWidget(self.fav_host)
+        # picker: dropdown + favourite + delete
+        pick = QtWidgets.QHBoxLayout(); pick.setSpacing(8)
+        self.combo = QtWidgets.QComboBox(); self.combo.setObjectName("combo"); self.combo.setFixedHeight(38)
+        self.combo.setCursor(Qt.CursorShape.PointingHandCursor); self.combo.activated.connect(self._combo_pick)
+        self.fav_btn = QtWidgets.QPushButton("☆"); self.fav_btn.setObjectName("iconbtn"); self.fav_btn.setFixedSize(38, 38)
+        self.fav_btn.setCursor(Qt.CursorShape.PointingHandCursor); self.fav_btn.clicked.connect(self._toggle_fav)
+        self.del_btn = QtWidgets.QPushButton("🗑"); self.del_btn.setObjectName("iconbtn"); self.del_btn.setFixedSize(38, 38)
+        self.del_btn.setCursor(Qt.CursorShape.PointingHandCursor); self.del_btn.clicked.connect(self._delete)
+        pick.addWidget(self.combo, 1); pick.addWidget(self.fav_btn); pick.addWidget(self.del_btn)
+        v.addLayout(pick)
+        # bands
+        bands = QtWidgets.QHBoxLayout(); bands.setSpacing(10)
+        self.bands = []
+        for lbl in labels:
+            b = EQBand(lbl, self._apply); self.bands.append(b); bands.addWidget(b)
+        v.addLayout(bands)
+        # save new
+        save = QtWidgets.QHBoxLayout(); save.setSpacing(8)
+        self.save_name = QtWidgets.QLineEdit(); self.save_name.setObjectName("nameinput")
+        self.save_name.setPlaceholderText("Name a new profile from these sliders…"); self.save_name.setFixedHeight(38)
+        self.save_name.returnPressed.connect(self._save)
+        sb = QtWidgets.QPushButton("＋  Save"); sb.setObjectName("savebtn")
+        sb.setCursor(Qt.CursorShape.PointingHandCursor); sb.clicked.connect(self._save)
+        save.addWidget(self.save_name, 1); save.addWidget(sb)
+        v.addLayout(save)
+        self._rebuild()
+        for b, g in zip(self.bands, current_fn()):
+            b.s.blockSignals(True); b.s.setValue(g); b.val.setText(f"{g:+d}" if g else "0"); b.s.blockSignals(False)
+
+    def _all(self):
+        d = dict(self._presets); d.update(self.custom); return d
+
+    def _apply(self, *_):
+        self._apply_fn([b.s.value() for b in self.bands])
+
+    def _rebuild(self):
+        while self.fav_row.count():
+            it = self.fav_row.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+        favs = [n for n in self.favs if n in self._all()]
+        if favs:
+            for name in favs:
+                b = QtWidgets.QPushButton("★ " + name); b.setObjectName("favchip")
+                b.setCursor(Qt.CursorShape.PointingHandCursor)
+                b.clicked.connect(lambda _, n=name: self._pick(n))
+                self.fav_row.addWidget(b)
+        else:
+            lab = QtWidgets.QLabel("☆  No favourites yet — pick a profile, tap the star")
+            lab.setObjectName("rdesc"); self.fav_row.addWidget(lab)
+        self.fav_row.addStretch()
+        self.combo.blockSignals(True); self.combo.clear()
+        names = list(self._all().keys())
+        for n in names:
+            self.combo.addItem(("★ " if n in self.favs else "") + n, n)
+        self.combo.setCurrentIndex(names.index(self._current) if self._current in names else 0)
+        self.combo.blockSignals(False)
+        self.fav_btn.setText("★" if self._current in self.favs else "☆")
+        self.del_btn.setEnabled(self._current in self.custom)
+
+    def _combo_pick(self, idx):
+        name = self.combo.itemData(idx)
+        if name:
+            self._pick(name)
+
+    def _pick(self, name):
+        self._current = name
+        self.load_preset(name)
+        self._rebuild()
+
+    def _toggle_fav(self):
+        n = self._current
+        (self.favs.remove(n) if n in self.favs else self.favs.append(n))
+        save_profiles(self.custom, self.favs, self._path)
+        self._rebuild()
+
+    def _delete(self):
+        n = self._current
+        if n in self.custom:
+            self.custom.pop(n, None)
+            if n in self.favs:
+                self.favs.remove(n)
+            self._current = next(iter(self._presets))
+            save_profiles(self.custom, self.favs, self._path)
+            self._rebuild()
+
+    def _save(self):
+        gains = [b.s.value() for b in self.bands]
+        name = self.save_name.text().strip()
+        if not name:
+            k = 1
+            while f"Custom {k}" in self._all():
+                k += 1
+            name = f"Custom {k}"
+        self.custom[name] = gains
+        self._current = name
+        save_profiles(self.custom, self.favs, self._path)
+        self.save_name.clear()
+        self._rebuild()
+
+    def load_preset(self, name):
+        gains = self._all().get(name, [0] * 10)
+        for b, g in zip(self.bands, gains):
+            b.s.blockSignals(True); b.s.setValue(g); b.val.setText(f"{g:+d}" if g else "0"); b.s.blockSignals(False)
+        self._apply_fn(gains)
+
+
 # ============================================================ main window
 class Panel(QtWidgets.QMainWindow):
     def __init__(self, dev):
@@ -569,7 +749,15 @@ class Panel(QtWidgets.QMainWindow):
 
     # ---- MIC
     def _page_mic(self):
-        w, v = self._page("Microphone", "Sidetone and mute")
+        w, v = self._page("Microphone", "Equalizer, sidetone and mute")
+        # mic EQ — same style as the headphone EQ, applied to your voice live
+        eqcard = Card()
+        hint = QtWidgets.QLabel("Voice EQ — select “Barracuda Mic (clean)” as input in your app")
+        hint.setObjectName("rdesc"); eqcard.v.addWidget(hint)
+        self.mic_eq = EQSection(MIC_EQ_LABELS, MIC_EQ_PRESETS, MIC_PROFILES_PATH,
+                                mic_eq_apply, mic_eq_current, default="Clarity")
+        eqcard.v.addWidget(self.mic_eq)
+        v.addWidget(eqcard)
         card = Card()
         self.st_on = Toggle(); self.st_on.toggled.connect(self.apply_sidetone)
         card.v.addWidget(Row("Sidetone", "Hear your own mic in the headset", self.st_on))
@@ -585,7 +773,12 @@ class Panel(QtWidgets.QMainWindow):
         self.mic_tog = Toggle(); self.mic_tog.toggled.connect(lambda on: mic_set_mute(on))
         card.v.addWidget(Row("Mute microphone", "Silence the mic (system mixer)", self.mic_tog))
         v.addWidget(card); v.addStretch()
-        return w
+        # taller than the window now (EQ + sidetone + mute) -> make it scroll
+        sc = QtWidgets.QScrollArea(); sc.setObjectName("content"); sc.setWidgetResizable(True)
+        sc.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        sc.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        sc.setWidget(w)
+        return sc
 
     # ---- POWER
     def _page_power(self):

@@ -24,6 +24,46 @@ change **live** (no restart), and it persists across reboots.
 - The GUI (`tools/razer_barracuda_gui.py`) does this for you and also writes the
   gains back into `99-barracuda-eq.conf` so they survive reboots.
 
+## Microphone EQ (`97-barracuda-mic-eq.conf`)
+Same idea for the mic: a `filter-chain` that exposes a virtual input source
+**"Barracuda Mic (clean)"** with a fixed 75 Hz high-pass + a **10-band EQ**
+(`mic0..mic9`). The high-pass kills the low-frequency rumble/plosive energy that
+overdrives this boom mic and reads as a distorted *"brr"* on loud speech.
+
+Install:
+```
+cp 97-barracuda-mic-eq.conf ~/.config/pipewire/pipewire.conf.d/
+systemctl --user restart pipewire pipewire-pulse wireplumber
+pactl set-default-source barracuda_mic
+```
+Then select **"Barracuda Mic (clean)"** as the input in your app (Discord/OBS
+ignore the system default — pick it manually, and turn OFF Discord's own noise
+suppression so it doesn't fight the chain).
+
+Adjust live (or use the GUI's **Microphone** tab — same band sliders + presets
+as the headphone EQ; gains persist back into this file):
+```
+pw-cli set-param <id> Props '{ params = [ "mic0:Gain" -2.0 "mic6:Gain" 3.0 ... ] }'
+```
+(`<id>` from `pw-dump | grep barracuda_mic_in`)
+
+## Mic crackle / "brr" / weird sounds
+Three independent causes, fix in this order:
+1. **Clipping** (distorted *"brr"*, "goes out of bounds" on loud speech) — the
+   mic ADC gain has no headroom. Drop it:
+   `amixer -c<card> sset 'Mic' 57`  (≈ -5 dB; card from `aplay -l`). Lower more
+   if it still clips.
+2. **Boomy/rumbly low-end** — the mic EQ's fixed high-pass + a low-cut preset
+   (try **Anti-Pop** or **Clarity**) handle it.
+3. **Pop/crackle when an app opens the mic** — the capture node suspends when
+   idle and pops on resume. Fixed by `../wireplumber/51-barracuda-mic.conf`
+   (`session.suspend-timeout-seconds = 0`). Do NOT force `api.alsa.period-size`
+   on this USB 1.1 full-speed device — non-native periods garble the
+   isochronous packing and make it worse.
+
 ## Latency
-`98-low-latency.conf` drops the buffer (quantum 512 ≈ 10 ms) for gaming. Raise
-the quantum if you get crackling.
+`98-low-latency.conf` drops the buffer (quantum 512 ≈ 10 ms) for gaming. The
+Barracuda is a **USB 1.1 full-speed** device, so total latency ≈ the 2.4 GHz
+radio (~30 ms, fixed) + this buffer. Lower the quantum for less lag, raise it
+(768/1024) if you get crackling; below ~256 USB 1.1 can't keep up and crackles.
+Watch the **ERR** column in `pw-top` — climbing = underruns, back off.
