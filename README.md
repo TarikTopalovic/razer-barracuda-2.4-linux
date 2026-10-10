@@ -87,6 +87,33 @@ sudo udevadm control --reload-rules
 # replug the dongle
 ```
 
+## Web UI (`web/`) — Barracuda + Viper Mini in the browser
+
+Razer's own *Synapse Web* (WebHID) is Windows/macOS-only, needs Chrome, and doesn't
+cover these devices. `web/` is a Linux stand-in that works in any browser, Firefox
+included: a stdlib Python server on `127.0.0.1:3816` does the device work.
+
+- **Barracuda 2.4:** battery/charging, volume, mic mute, sidetone + level,
+  power-saving — reuses `tools/razer_barracuda.py`. No EQ: over the dongle `0x93`
+  does nothing (Synapse EQ is PC-side DSP — use the PipeWire EQ below).
+- **Razer Viper Mini** (`1532:008a`): DPI, DPI stages, polling rate, logo lighting
+  (static / breathing / spectrum / off, colour, brightness) through the
+  [OpenRazer](https://openrazer.github.io/) kernel driver's sysfs files
+  (`openrazer-driver-dkms`; the daemon isn't needed).
+
+```sh
+# one-time, as root: dongle access + OpenRazer's sysfs group
+install -m644 tools/99-razer-barracuda.rules /etc/udev/rules.d/
+udevadm control --reload && udevadm trigger --subsystem-match=hidraw
+usermod -aG openrazer "$YOUR_USER"
+# then
+web/razer        # starts the server if needed and opens http://127.0.0.1:3816/
+```
+
+Headset sidetone/power-saving can't be read back from the dongle, so the page
+remembers your last choice in the browser. Changes are only accepted from the
+page's own origin.
+
 ## Audio control on Linux (PipeWire) — `pipewire/`, `wireplumber/`
 
 The device's EQ/THX/mic-NC aren't dongle commands (they're PC-side DSP), so on

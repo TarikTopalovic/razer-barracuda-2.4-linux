@@ -1,0 +1,13 @@
+#!/bin/bash
+# Open the Razer Linux web UI (Viper Mini + Barracuda 2.4) in the default browser.
+cd "$(dirname "$(readlink -f "$0")")"
+if ! ss -ltn | grep -q '127.0.0.1:3816 '; then
+  # Joined the openrazer group but haven't logged out yet? newgrp picks it up without a re-login.
+  if ! id -nG | grep -qw openrazer && getent group openrazer | grep -qw "$USER"; then
+    echo "exec python3 server.py" | SHELL=/bin/bash setsid newgrp openrazer >/tmp/razer-linux-web.log 2>&1 &
+  else
+    setsid python3 server.py >/tmp/razer-linux-web.log 2>&1 < /dev/null &
+  fi
+  sleep 1
+fi
+xdg-open http://127.0.0.1:3816/ >/dev/null 2>&1

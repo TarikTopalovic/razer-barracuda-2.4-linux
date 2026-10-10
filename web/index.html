@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Razer — Linux</title>
+<style>
+  :root { --g:#44d62c; --bg:#0b0b0b; --card:#161616; --line:#2a2a2a; --mute:#9a9a9a; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:#eee; font:15px/1.4 system-ui, sans-serif; }
+  header { display:flex; align-items:center; gap:12px; padding:14px 18px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header b { color:var(--g); letter-spacing:.12em; font-size:17px; }
+  nav { display:flex; gap:6px; margin-left:auto; }
+  nav button, .seg button, .seg-btn { background:none; border:1px solid var(--line); color:#ddd; min-height:42px; padding:0 14px; border-radius:6px; font:inherit; cursor:pointer; }
+  nav button.on, .seg button.on { border-color:var(--g); color:var(--g); }
+  main { max-width:760px; margin:0 auto; padding:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:14px; }
+  h2 { margin:0 0 12px; font-size:15px; text-transform:uppercase; letter-spacing:.08em; color:var(--mute); }
+  .row { display:flex; align-items:center; gap:12px; margin:10px 0; flex-wrap:wrap; }
+  .row > label { min-width:120px; }
+  .seg { display:flex; gap:6px; flex-wrap:wrap; }
+  input[type=range] { flex:1; min-width:150px; accent-color:var(--g); height:40px; }
+  input[type=number] { width:90px; min-height:42px; background:#000; color:#eee; border:1px solid var(--line); border-radius:6px; padding:0 8px; font:inherit; }
+  input[type=color] { width:56px; height:42px; border:1px solid var(--line); background:none; border-radius:6px; }
+  .big { font-size:28px; color:var(--g); font-weight:600; min-width:80px; }
+  .bar { flex:1; height:12px; background:#000; border:1px solid var(--line); border-radius:6px; overflow:hidden; min-width:120px; }
+  .bar i { display:block; height:100%; background:var(--g); width:0; }
+  .muted { color:var(--mute); font-size:14px; }
+  .warn { border-color:#c79a00; }
+  .warn code { display:block; background:#000; padding:10px; border-radius:6px; margin-top:8px; white-space:pre-wrap; word-break:break-all; font-size:14px; }
+  .stage { display:flex; align-items:center; gap:6px; }
+  .stage input[type=radio] { accent-color:var(--g); width:40px; height:40px; margin:0; }
+  #toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:#222; border:1px solid var(--line); padding:10px 16px; border-radius:8px; opacity:0; transition:opacity .2s; max-width:90vw; }
+  #toast.show { opacity:1; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<header><b>RAZER</b><span class="muted">Linux</span>
+  <nav><button data-tab="mouse" class="on">Viper Mini</button><button data-tab="headset">Barracuda 2.4</button></nav>
+</header>
+<main>
+  <div class="card warn" id="setup" hidden>
+    <h2>One-time setup needed</h2>
+    <div id="setupwhy"></div>
+    <code>su -c "install -m644 {{RULE}} /etc/udev/rules.d/ &amp;&amp; udevadm control --reload &amp;&amp; udevadm trigger --subsystem-match=hidraw &amp;&amp; usermod -aG openrazer {{USER}}"</code>
+    <div class="muted">Then close this page and open Razer again from the app menu.</div>
+  </div>
+
+  <section id="mouse">
+    <div class="card" id="m-none" hidden><span class="muted">Viper Mini not connected.</span></div>
+    <div id="m-ui">
+      <div class="card"><h2>Sensitivity</h2>
+        <div class="row"><span class="big" id="dpiv">—</span><span class="muted">DPI</span></div>
+        <div class="row"><input type="range" id="dpi" min="100" max="8500" step="50"></div>
+        <h2 style="margin-top:16px">DPI stages <span class="muted">(button under the wheel)</span></h2>
+        <div class="row" id="stages"></div>
+        <div class="row"><button class="seg-btn" id="savestages">Save stages</button></div>
+      </div>
+      <div class="card"><h2>Polling rate</h2>
+        <div class="seg" id="poll"><button data-v="125">125 Hz</button><button data-v="500">500 Hz</button><button data-v="1000">1000 Hz</button></div>
+      </div>
+      <div class="card"><h2>Lighting</h2>
+        <div class="seg" id="fx"><button data-v="static">Static</button><button data-v="breath">Breathing</button><button data-v="spectrum">Spectrum</button><button data-v="off">Off</button></div>
+        <div class="row"><label>Colour</label><input type="color" id="color" value="#44d62c"></div>
+        <div class="row"><label>Brightness</label><input type="range" id="bright" min="0" max="255"></div>
+      </div>
+      <div class="muted" id="minfo"></div>
+    </div>
+  </section>
+
+  <section id="headset" hidden>
+    <div class="card" id="h-none" hidden><span class="muted">Barracuda dongle not connected.</span></div>
+    <div id="h-ui">
+      <div class="card"><h2>Battery</h2>
+        <div class="row"><span class="big" id="batt">—</span><div class="bar"><i id="battbar"></i></div><button id="refresh" class="seg-btn">Refresh</button></div>
+        <div class="muted" id="battnote"></div>
+      </div>
+      <div class="card"><h2>Sound</h2>
+        <div class="row"><label>Volume</label><input type="range" id="vol" min="0" max="100"></div>
+        <div class="row"><label>Microphone</label><div class="seg" id="mic"><button data-v="0">On</button><button data-v="1">Muted</button></div></div>
+      </div>
+      <div class="card"><h2>Sidetone (hear your own voice)</h2>
+        <div class="row"><div class="seg" id="side"><button data-v="1">On</button><button data-v="0">Off</button></div></div>
+        <div class="row"><label>Level</label><input type="range" id="sidelvl" min="0" max="16"></div>
+      </div>
+      <div class="card"><h2>Power saving (auto off when idle)</h2>
+        <div class="seg" id="ps"><button data-v="0">Never</button><button data-v="15">15 min</button><button data-v="30">30 min</button><button data-v="60">60 min</button></div>
+        <div class="muted" style="margin-top:8px">The headset forgets this when it powers fully off.</div>
+      </div>
+    </div>
+  </section>
+</main>
+<div id="toast"></div>
+<script>
+const $ = id => document.getElementById(id);
+const saved = JSON.parse(localStorage.razer || "{}");   // headset choices it can't read back
+const remember = (k, v) => { saved[k] = v; localStorage.razer = JSON.stringify(saved); };
+let toastT;
+function toast(t) { $("toast").textContent = t; $("toast").classList.add("show"); clearTimeout(toastT); toastT = setTimeout(() => $("toast").classList.remove("show"), 2200); }
+async function post(dev, body) {
+  const r = await fetch("/api/" + dev, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json(); toast(r.ok ? "Saved" : (j.error || "Failed")); return r.ok;
+}
+function seg(id, v) { document.querySelectorAll(`#${id} button`).forEach(b => b.classList.toggle("on", b.dataset.v == v)); }
+function onSeg(id, fn) { document.querySelectorAll(`#${id} button`).forEach(b => b.onclick = async () => { if (await fn(b.dataset.v)) seg(id, b.dataset.v); }); }
+const debounce = (fn, ms = 250) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
+  ["mouse", "headset"].forEach(s => $(s).hidden = s !== b.dataset.tab);
+});
+
+function renderStages(list, active) {
+  $("stages").innerHTML = "";
+  for (let i = 0; i < 5; i++) {
+    const v = list[i] || "";
+    $("stages").insertAdjacentHTML("beforeend",
+      `<span class="stage"><input type="radio" name="act" value="${i + 1}" ${active == i + 1 ? "checked" : ""} aria-label="Active stage ${i + 1}"><input type="number" min="100" max="8500" step="50" value="${v}" placeholder="—" aria-label="Stage ${i + 1} DPI"></span>`);
+  }
+}
+
+async function load() {
+  const s = await (await fetch("/api/state")).json(), m = s.mouse, h = s.headset;
+  const why = [];
+  if (m.present && !m.access) why.push("Your user can't change the Viper Mini yet (needs the openrazer group).");
+  if (h.present && !h.access) why.push("Your user can't talk to the Barracuda dongle yet (needs its udev rule).");
+  $("setup").hidden = !why.length; $("setupwhy").textContent = why.join(" ");
+
+  $("m-none").hidden = m.present; $("m-ui").hidden = !m.access;
+  if (m.access) {
+    $("dpi").value = m.dpi; $("dpiv").textContent = m.dpi;
+    renderStages(m.stages, m.active); seg("poll", m.poll); $("bright").value = m.brightness;
+    seg("fx", saved.fx); if (saved.color) $("color").value = saved.color;
+    $("minfo").textContent = `Firmware ${m.firmware} · Serial ${m.serial}`;
+  }
+
+  $("h-none").hidden = h.present; $("h-ui").hidden = !h.present;
+  if (h.volume != null) $("vol").value = h.volume;
+  if (h.mic_muted != null) seg("mic", h.mic_muted ? 1 : 0);
+  showBatt(h);
+  seg("side", saved.side); seg("ps", saved.ps);
+  if (saved.sidelvl != null) $("sidelvl").value = saved.sidelvl;
+}
+function showBatt(h) {
+  const ok = h.battery != null;
+  $("batt").textContent = ok ? h.battery + "%" : "—";
+  $("battbar").style.width = (ok ? h.battery : 0) + "%";
+  $("battnote").textContent = !h.access ? "" : ok ? (h.charging ? "Charging" : "On battery") : "No reply — the headset may be off or out of range.";
+}
+
+// mouse
+$("dpi").oninput = () => $("dpiv").textContent = $("dpi").value;
+$("dpi").onchange = () => post("mouse", { dpi: +$("dpi").value });
+$("savestages").onclick = () => {
+  const ins = [...document.querySelectorAll("#stages .stage")];
+  const stages = [], act = +(document.querySelector("#stages input[name=act]:checked") || {}).value || 1;
+  let active = 1;
+  ins.forEach((s, i) => { const v = +s.querySelector("[type=number]").value; if (v) { stages.push(v); if (i + 1 === act) active = stages.length; } });
+  post("mouse", { stages, active }).then(ok => ok && load());
+};
+onSeg("poll", v => post("mouse", { poll: +v }));
+onSeg("fx", async v => { const ok = await post("mouse", { effect: v, color: $("color").value }); if (ok) remember("fx", v); return ok; });
+$("color").oninput = debounce(async () => {   // a colour pick always shows: Spectrum/Off/none switch to Static
+  remember("color", $("color").value);
+  const fx = saved.fx === "breath" ? "breath" : "static";
+  if (await post("mouse", { effect: fx, color: $("color").value })) { remember("fx", fx); seg("fx", fx); }
+});
+$("bright").onchange = () => post("mouse", { brightness: +$("bright").value });
+
+// headset
+$("refresh").onclick = async () => { $("battnote").textContent = "Reading…"; showBatt((await (await fetch("/api/state")).json()).headset); };
+$("vol").oninput = debounce(() => post("headset", { volume: +$("vol").value }));
+onSeg("mic", v => post("headset", { mic_muted: v == 1 }));
+onSeg("side", async v => (await post("headset", v == 1 ? { sidetone: true, sidetone_level: +$("sidelvl").value } : { sidetone: false })) && (remember("side", v), true));
+$("sidelvl").onchange = () => { remember("sidelvl", +$("sidelvl").value); post("headset", { sidetone: true, sidetone_level: +$("sidelvl").value }).then(ok => ok && (remember("side", 1), seg("side", 1))); };
+onSeg("ps", async v => (await post("headset", { power_saving: +v })) && (remember("ps", v), true));
+
+load();
+setInterval(() => !$("headset").hidden && $("refresh").click(), 60000);   // battery once a minute while the tab is open
+</script>
+</body>
+</html>
